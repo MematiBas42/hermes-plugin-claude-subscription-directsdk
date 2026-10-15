@@ -1,5 +1,7 @@
 # Claude Subscription DirectSDK (Experimental) — Hermes plugin
 
+> Part of [Hermes Official Plugins](../README.md), Nous Research's official plugins for Hermes Agent. Formerly [`NousResearch/hermes-plugin-claude-subscription-directsdk`](https://github.com/NousResearch/hermes-plugin-claude-subscription-directsdk), which is archived; this directory carries its full history.
+
 ![Claude Subscription DirectSDK — a Hermes model-provider plugin: Hermes → claude CLI → stream-json, on your Claude Pro/Max subscription](assets/hero-technohellenic.png)
 
 Standalone Hermes Agent model-provider plugin: `claude-subscription-directsdk-experimental`, displayed as **Claude Subscription DirectSDK (Experimental)**. It drives the unmodified official Claude Code executable as a request-scoped model client for your Claude Pro/Max subscription. Hermes keeps its normal agent loop, tools, approvals and compaction. Despite the name, the implementation speaks native stream-json directly and does not require the Python Agent SDK package.
@@ -26,10 +28,7 @@ Install Claude Code with `npm install -g @anthropic-ai/claude-code`. `claude` is
 ```sh
 hermes plugins install claude-subscription-directsdk      # from the Hermes plugin catalog (pinned, reviewed)
 # or straight from GitHub (tracks main):
-hermes plugins install NousResearch/hermes-plugin-claude-subscription-directsdk
-# or, by hand:
-git clone https://github.com/NousResearch/hermes-plugin-claude-subscription-directsdk \
-    ~/.hermes/plugins/claude-subscription-directsdk-experimental
+hermes plugins install NousResearch/hermes-official-plugins#claude-subscription-directsdk
 
 claude auth login
 hermes model          # pick "Claude Subscription DirectSDK (Experimental)"
@@ -65,7 +64,7 @@ CLAUDE_CONFIG_DIR=/path/to/official-cli-config claude auth login
 export CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR=/path/to/official-cli-config
 ```
 
-An inherited `CLAUDE_CONFIG_DIR` also works. To select an executable outside PATH, set `CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND` to its absolute path. There is no unrestricted public CLI-flags setting; isolation and denial flags are plugin-owned. The low-level Python `Client(env=...)` injection is available for explicitly controlled local fixtures and does not apply the inherited-environment guard. It is not the normal Hermes provider path or an OAuth certification mechanism.
+An inherited `CLAUDE_CONFIG_DIR` also works; the per-profile `claude_config_dir` setting takes precedence over both environment directories. To select an executable outside PATH, set `CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND` to its absolute path. There is no unrestricted public CLI-flags setting; isolation and denial flags are plugin-owned. The low-level Python `Client(env=...)` injection is available for explicitly controlled local fixtures and does not apply the inherited-environment guard. It is not the normal Hermes provider path or an OAuth certification mechanism.
 
 Persistent configuration:
 
@@ -83,13 +82,23 @@ The relay opens the upstream connection itself, so it applies native's proxy var
 
 ## Settings
 
+**Claude login config directory** (`claude_config_dir`, string, empty by default). Select a separately logged-in Claude config directory for the active Hermes profile, including profiles served by one multiplexed gateway:
+
+```sh
+hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.claude_config_dir <dir>
+```
+
+Read on every native spawn, including auth-status and model-discovery probes. Precedence: nonempty per-profile setting after trimming whitespace → nonempty `CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR` → inherited `CLAUDE_CONFIG_DIR` → Claude CLI default. The selected value gets `~` expansion only; the plugin does not check whether the directory exists. An empty or whitespace-only setting falls through. A missing login produces the usual native authentication error. The process environment is never changed.
+
+**Limitation:** the plan-limits / account-usage snapshot (`_subscription_token()`) still uses core's `read_claude_code_credentials()`, which reads only the process `CLAUDE_CONFIG_DIR` and the default macOS keychain entry. It does not follow this per-profile setting or `CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR`, so the snapshot may describe a different account from the native child.
+
 **Claude Code telemetry and feature flags** (`claude_code_telemetry`, on by default). Claude Code sends its usage telemetry and fetches feature flags; the flags are what unlock newer and older models in its model picker, so with them off the picker can shrink from every model your account runs to each family's current one (#86). Turn it off to keep Claude Code quiet: the plugin then starts it with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING` set, and the pinned model table fills in the picker. Change it in the Desktop app under **Capabilities → Plugins**: the settings gear on the `claude-subscription-directsdk-experimental` row opens the switch. Or from the CLI:
 
 ```sh
 hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.claude_code_telemetry false
 ```
 
-It is read for the active profile on every spawn, so it applies to the next request without a restart. Whatever the setting, the plugin never lets the CLI auto-update itself or use its feedback upload path (`DISABLE_AUTOUPDATER`, `DISABLE_FEEDBACK_COMMAND`), and an opt-out you export yourself (`DISABLE_TELEMETRY`, `DO_NOT_TRACK`, ...) is passed through untouched.
+It is read for the active profile on every spawn, so it applies to the next request without a restart. Whatever the setting, the plugin never lets the CLI auto-update itself, use its feedback upload path or send its own session-title request (`DISABLE_AUTOUPDATER`, `DISABLE_FEEDBACK_COMMAND`, `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`), and an opt-out you export yourself (`DISABLE_TELEMETRY`, `DO_NOT_TRACK`, ...) is passed through untouched.
 
 ## Ownership and replay
 
@@ -97,7 +106,7 @@ Each `chat.completions.create` starts a fresh process in a private temporary dir
 
 Canonical history is replayed in order. Historical user frames use `shouldQuery:false`, each with a zero-turn acknowledgment; the final user/tool-result frame queries. There is no parked native session or native approval wait, and the adapter adds no synthetic continue prompt. The local admission relay prevents native recovery from issuing another upstream request. The native token-budget reminder is disabled because Hermes owns budgets and replay reconstructs that reminder across the cache boundary. Other native annotations remain present, so the wire prompt is not byte-identical Hermes-only context. On the conversation's first request native prepends its per-request context block to Hermes' first user turn but replays that turn without it afterwards; the relay moves that block behind Hermes' frame (the order native already uses on later turns), so the first turn is cached once instead of being re-written on call #2 (#77).
 
-The relay restores the newest tool-result frame from Hermes' query when it can match the native frame unambiguously, so a native account-email reminder cannot masquerade as tool output. A frame it cannot match losslessly is forwarded exactly as native built it, and the mismatch is reported in the response usage (`native_admission.unrestored`). Restoration is limited to queried frames containing tool results; ordinary user turns and separate native system messages are untouched. The relay treats omitted `is_error` as `false`, restores Hermes' exact original result shape after matching equivalent plain-text encodings, and admits only unmarked plain-text additions after the matched frame. Images, metadata-bearing text, unexpected results, ambiguous cache-marker mappings, or changed tool identity/content leave the native frame untouched (fail open), so a CLI that reshapes its tool results costs an uncached tail, never a failed turn. Marker-bearing additions are validated before breakpoint relocation, preventing cache-marker laundering onto host content. When native marks more than one message block (Claude Code 2.1.287+ marks the last `tool_use` and a trailing per-request `role: system` message), marks after the last block the next request replays are folded into one breakpoint on that block; marks inside the replayed span, and every system/tools mark, stay as native placed them, so the breakpoint count never grows. Synthetic loopback tests establish wire-history continuity across requests and client recreation, not vendor cache hits or savings.
+The relay restores the newest tool-result frame from Hermes' query when it can match the native frame unambiguously, so a native account-email reminder cannot masquerade as tool output. A frame it cannot match losslessly is forwarded exactly as native built it, and the mismatch is reported in the response usage (`native_admission.unrestored`). Restoration is limited to queried frames containing tool results; ordinary user turns and separate native system messages are untouched. The relay treats omitted `is_error` as `false`, restores Hermes' exact original result shape after matching equivalent plain-text encodings, and admits only unmarked plain-text additions after the matched frame. Images, metadata-bearing text, unexpected results, ambiguous cache-marker mappings, or changed tool identity/content leave the native frame untouched (fail open), so a CLI that reshapes its tool results costs an uncached tail, never a failed turn. Marker-bearing additions are validated before breakpoint relocation, preventing cache-marker laundering onto host content. When native marks more than one message block (Claude Code 2.1.287+ marks the last `tool_use` and a trailing per-request `role: system` message), marks after the last block the next request replays are folded into one breakpoint on that block; marks inside the replayed span, and every system/tools mark, stay as native placed them. Once a user message carries more than tool results (the next turn, or a `/steer` row), cache entries written after the finished turn's first thinking block stop matching, and Anthropic's lookup walks back at most 20 blocks from a breakpoint, so after a longer tool loop the next turn's first call read only tools and system and wrote the whole conversation again (#122). The relay therefore keeps one more message breakpoint on the last block of the user message right before the open turn's first assistant message with thinking (usually the turn's opening frame, or a `/steer` row), where an earlier request of the turn already wrote an entry, once that block is more than 20 blocks (counted without merging tool runs) before the recurring breakpoint; the next turn then re-writes only the finished loop from its first thinking block. A shorter loop, or one without thinking, keeps the recurring breakpoint alone. Native 2.1.285 places three breakpoints (two system, one message), so the extra one is the fourth; on a request already at Anthropic's limit of four (2.1.287+), a native mark between it and the recurring breakpoint moves there instead, and with neither it is skipped. Every marker in the request takes a slot, including a top-level one and markers nested in tool-result content. So the count grows by at most one and never past four, the extra mark takes the TTL of the next mark after it, and system/tools marks are never touched. Synthetic loopback tests establish wire-history continuity across requests and client recreation, not vendor cache hits or savings.
 
 The relay binds an ephemeral loopback port with a random per-request route. Native authorization headers pass through memory directly to the upstream; headers are not logged or persisted. The upstream request body and native identity headers are preserved, while HTTP transfer encoding is normalized. The relay captures streamed text, signed thinking, tool arguments, usage and stop reason before native recovery can replace them. Cancellation shuts down the active upstream connection and the native process; request teardown removes the listener. No external relay service or bundled vendor executable is required.
 
