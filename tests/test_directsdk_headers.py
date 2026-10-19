@@ -36,14 +36,29 @@ class RequestHeaders(unittest.TestCase):
                 encoded, _, _ = directsdk.request_body({'extra_headers': headers})
                 self.assertEqual(json.loads(encoded), {'tools': []})
 
-    def test_non_trace_headers_and_invalid_containers_fail_closed(self) -> None:
-        invalid = ([], '', {'Authorization': 'test-not-a-secret'},
-                   {'x-api-key': 'test-not-a-secret'}, {'traceparent': None},
-                   {1: 'trace'}, {'traceparent': 'trace', 'x-custom': 'value'})
-        for headers in invalid:
+    def test_invalid_header_containers_fail_closed(self) -> None:
+        for headers in ([], '', 123):
             with self.subTest(headers=headers):
-                with self.assertRaisesRegex(ValueError, 'host traceparent metadata only'):
+                with self.assertRaisesRegex(ValueError, 'extra_headers must be a dictionary'):
                     directsdk.request_body({'extra_headers': headers})
+
+    def test_unrecognized_headers_are_dropped_silently(self) -> None:
+        request = {
+            'extra_headers': {
+                'x-agent-id': 'subagent',
+                'traceparent': '00-trace-01',
+                'Authorization': 'test-secret',
+            }
+        }
+        encoded, _, _ = directsdk.request_body(request)
+        self.assertEqual(json.loads(encoded), {'tools': []})
+        self.assertEqual(request['extra_headers'], {'traceparent': '00-trace-01'})
+
+    def test_subagent_headers_without_traceparent_are_dropped(self) -> None:
+        request = {'extra_headers': {'x-agent-id': 'subagent'}}
+        encoded, _, _ = directsdk.request_body(request)
+        self.assertEqual(json.loads(encoded), {'tools': []})
+        self.assertEqual(request['extra_headers'], {})
 
     def test_trace_header_name_is_case_insensitive(self) -> None:
         encoded, _, _ = directsdk.request_body({'extra_headers': {'TraceParent': 'host-trace'}})

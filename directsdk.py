@@ -255,11 +255,16 @@ def request_body(kwargs):
         raise ValueError('Unsupported request parameters: ' + ', '.join(sorted(unknown)))
     # Hermes Relay attaches host tracing to chat-completions clients. Keep it host-local:
     # never project it into generation fields or override the official CLI's identity.
+    # Host orchestration (e.g. subagents with x-agent-id) attaches extra metadata headers;
+    # drop unrecognized host headers rather than failing closed, since native CLI needs none of them.
     headers = kwargs.get('extra_headers')
-    if headers is not None and (not isinstance(headers, dict) or any(
-            not isinstance(key, str) or key.lower() != 'traceparent' or not isinstance(value, str)
-            for key, value in headers.items())):
-        raise ValueError('extra_headers supports host traceparent metadata only')
+    if headers is not None:
+        if not isinstance(headers, dict):
+            raise ValueError('extra_headers must be a dictionary')
+        kwargs['extra_headers'] = {
+            k: v for k, v in headers.items()
+            if isinstance(k, str) and k.lower() == 'traceparent' and isinstance(v, str)
+        }
     if kwargs.get('n', 1) != 1 or kwargs.get('tool_choice', 'auto') not in ('auto', None):
         raise ValueError('Only n=1 and tool_choice=auto are supported')
     if kwargs.get('parallel_tool_calls') is False:
